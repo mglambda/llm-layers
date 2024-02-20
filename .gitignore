@@ -1,0 +1,7 @@
+env/
+.stack-work/
+etc/
+app/data/
+*~
+__*
+#*#

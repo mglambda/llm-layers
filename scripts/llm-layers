@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+import llm_layers.generate
+
+
+if __name__ == "__main__":
+   llm_layers.generate.main()
