@@ -1,6 +1,7 @@
 import os, appdirs, sys, traceback, csv, torch
 from tabulate import tabulate
 from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download
+from huggingface_hub.utils._errors import GatedRepoError
 
 def getLayersFile():
     return appdirs.user_config_dir() + "/llm_layers"
@@ -36,26 +37,47 @@ def reposFromFile(filename):
     for w in ws:
         query += w
         xs = list(list_models(search=query))
-        if best == [] or (len(xs) < len(best) and xs != []):
+        if xs == []:
+            # a longer string won't get any more results
+            break
+        if best == [] or (len(xs) < len(best)):
             # the more specific result is better, and fewer results is arguably more specific
             best = xs
 
     # get and check files
     winners = []
     for modelinfo in best:
-        for fileinfo in get_paths_info(modelinfo.id, filename):
-            # want exact match here
-            if fileinfo.path == filename:
-                winners.append(modelinfo.id)
+        try:
+            for fileinfo in get_paths_info(modelinfo.id, filename):
+                # want exact match here
+                if fileinfo.path == filename:
+                    winners.append(modelinfo.id)
+        except GatedRepoError:
+            continue
+        except HTTPError:
+            continue
                 
     return winners
             
 def pickWinner(winners, filename):
     """Given a list of repo ids and a file they contain, pick the best one to acquire later"""
     # This is a very simple algorithm, it's either theBloke or whoever has more downloads+likes
+    # hf has the brilliant strategy of throwing an exception when querying a gated repo, so no list comprehension here.
+    repo_data = []
+    for repo_id in winners:
+        try:
+            repo = repo_info(repo_id)
+        except GatedRepoError: # this is why we can't have nice things
+            continue
+        except HTTPError:
+            # this will mean we get no repo data if inet is down, which is fine
+            continue
+        
+        repo_data.append((repo_id, repo))                                
+
     winner = { "name" : "", "score" : 0}
-    for (repo_id, repo) in [(repo_id, repo_info(repo_id)) for repo_id in winners]:
-        if repo.author == "theBloke":
+    for (repo_id, repo) in repo_data:
+        if repo.author == "TheBloke":
             # clear winner, return early
             return repo_id
 
@@ -78,7 +100,7 @@ def load_layers_file(file=getLayersFile()):
     """Returns a list of dictionaries, one for each row in the layers file."""
     return loadLayersFile(file)
 
-def download_for_layer_file(filename):
+def download_for_layers_file(filename):
     """Takes filename of a layer file and downloads all listed model files using the huggingface api."""
     try:
         ds = load_layers_file(filename)
@@ -91,7 +113,7 @@ def download_for_layer_file(filename):
         if repo:
             print("Getting " + repo + " ...")
             snapshot_download(repo,
-                              allow_patterns=[d["name", "*README*", "*readme*", "*LICENSE*", "*license*"]])
+                              allow_patterns=[d["name"], "*README*", "*readme*", "*LICENSE*", "*license*", "*.txt", "*.md", "*.json"])
             
                                     
 

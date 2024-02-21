@@ -2,6 +2,7 @@
 import sys, os, stat, glob, argparse, appdirs, traceback, datetime, re, csv, tempfile
 from llm_layers import getData
 from llm_layers.layers import *
+from functools import *
 
 # switch output on and off globally
 print_enabled = True
@@ -53,7 +54,8 @@ def main():
         
     if args.executable == "" and args.generate:
         printerr("warning: No executable provided. You will either have to set LLM_SERVER in the environment or regenerate the scripts with --executable set. Otherwise the scripts won't work.")
-        
+
+        # FIXME: cmd is no longer correct
     cmd = sys.argv[0] + f" '{args.model_directory}' '{args.output_directory}' --prefix '{args.prefix}' --suffix '{args.suffix}' --executable '{args.executable}' --layers {args.layers} --context {args.context} --layers_file '{args.layers_file}' --additional_arguments '{args.additional_arguments}'"
 
 
@@ -65,11 +67,6 @@ def main():
         fail("Not a directory: " + mdir)
 
     models = getGGUFFiles(mdir, args)
-    if args.generate:
-        writeScriptFiles(models, sdir, args)
-
-
-
     # recommendations
     include_models = []
     if args.best_for_machine:
@@ -84,7 +81,7 @@ def main():
             cool_name = lines[0].replace("# id: ", "")
         else:
             cool_name = choice
-            printout("Done. Chose the '" + cool_name + "' loadout for your hardware.")
+        printout("Done. Chose the '" + cool_name + "' loadout for your hardware.")
         
         best_models = load_layers_file(getData(choice))
         include_models += best_models
@@ -93,16 +90,28 @@ def main():
     if args.layers_file != "":
         # get the includes
         for includefile in args.include_layers_file:
-            include_models += doLayersFile(includefile, models + include_models, args, dry=True)
+            # note the dry=true, this is not real writing layers file yet, we just want the include list
+            include_models += doLayersFile(includefile, ensureUniqueModels(models + include_models), args, dry=True)
             
-        layers_models = doLayersFile(args.layers_file, models + include_models, args, cmd=cmd)
+        layers_models = doLayersFile(args.layers_file, ensureUniqueModels(models + include_models), args, cmd=cmd)
     else:
         layers_models = []
 
     # downloading from hf
     if args.download:
-        print("Downloading models...")
-            
+        print("Downloading models... (you may want to grab a coffee)")
+        if args.dry_run:
+            layersfile = temp_layersfile
+        else:
+            layersfile = args.layers_file
+        download_for_layers_file(layersfile)
+        # regenerate file based models
+        models = getGGUFFiles(mdir, args)
+
+        
+        # writing the scripts - need to do this *after* downloading. Also note that we only write scripts for models that actually exist and have been found bygetGGUFFiles
+    if args.generate:
+        writeScriptFiles(models, sdir, args)
         
     printout("""If you want, add the following lines to your ~/.bashrc to set the values for all scripts.
 
@@ -200,7 +209,7 @@ def getGGUFFiles(mdir, args, extensions=["gguf"]):
     for file in files:
         if os.path.isfile(file):
             if file.lower().endswith(".gguf") and not(file in seen):
-                d = { "file" : file, "mmproj" : mmproj, "prompt_format" : prompt_format, "type" : model_type, "context" : args.context, "gpu_layers" : args.layers}
+                d = { "file" : file, "name" : os.path.basename(file), "mmproj" : mmproj, "prompt_format" : prompt_format, "type" : model_type, "context" : args.context, "gpu_layers" : args.layers}
 
                 seen.add(file)
                 models.append(d)
@@ -381,3 +390,20 @@ def writeScriptFiles(models, sdir, args):
         os.chmod(scriptfile, st.st_mode | stat.S_IEXEC)
 
     printout("Script files have been writen to " + sdir)    
+
+def ensureUniqueModels(models):
+    """Takes a list of models as dictionaries and removes entries with duplicate "name" fields. Returns the list without offending entries.
+    Current behaviour when a duplicate is encountered is to keep the layerfile model when conflict is between a model from a layerfile and a model read from the filesystem (which would just get default values assigned to it). In any other case, the model further down the list wins."""
+    def f(acc, model):
+        if model["name"] in [other["name"] for other in acc]:
+            # there are duplicates, now we need to decide who wins
+            if "file" in model.keys():
+                # other model in acc wins
+                return acc
+            else:
+                # i win, remove other and add myself
+                return list(filter(lambda other: other["name"] != model["name"], acc)) + [model]
+        return acc + [model]
+            
+    return reduce(f, models, [])
+
