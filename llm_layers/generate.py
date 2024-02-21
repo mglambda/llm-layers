@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import sys, os, stat, glob, argparse, appdirs, traceback, datetime, re, csv, tempfile
+import sys, os, stat, glob, argparse, appdirs, traceback, datetime, re, csv, tempfile, random
 from llm_layers import getData
 from llm_layers.layers import *
 from functools import *
@@ -73,20 +73,21 @@ def main():
         printout("Determining hardware...")
         vram = get_total_vram_mb()
         printout("Found " + str(vram) + "MB of maximum video ram.\nChoosing appropriate loadout...")
-        # arbitrary thresholds
-        # FIXME: not implemented yet
-        choice = "best_for_lte_6gb_vram.txt"
-        lines = open(getData(choice), "r").read().split("\n")
-        if lines != [] and lines[0].startswith("# id: "):
-            cool_name = lines[0].replace("# id: ", "")
+        choice = choiceForVRam(vram)
+        if choice is not None:
+            if "id" in choice:
+                cool_name = choice["id"]
+            else:
+                cool_name = choice["file"]
+            printout("Done. Chose the '" + cool_name + "' loadout for your hardware.")
+            if "description" in choice.keys():
+                printout("Description: " + choice["description"])
+            best_models = load_layers_file(choice["file"])
+            include_models += best_models
         else:
-            cool_name = choice
-        printout("Done. Chose the '" + cool_name + "' loadout for your hardware.")
-        
-        best_models = load_layers_file(getData(choice))
-        include_models += best_models
+            printerr("error: No loadouts found. Failed to select a loadout for your machine.")
 
-        # we always write this, though it might be a temp file
+    # we always write this, though it might be a temp file
     if args.layers_file != "":
         # get the includes
         for includefile in args.include_layers_file:
@@ -407,3 +408,81 @@ def ensureUniqueModels(models):
             
     return reduce(f, models, [])
 
+
+
+def choiceForVRam(vram):
+    path = getData("loadouts")
+    files = glob.glob(path + "/*")
+    loadouts = []
+    for file in files:
+        d = {}
+        if os.path.isdir(file):
+            continue
+        if os.path.isfile(file):
+            try:
+                d["file"] = file
+                lines = filter(lambda w: w != "" and w[0] == "#", open(file, "r").read().split("\n"))
+                # we will not validate the file, that is responsibility of layerfile readers etc, we just parse some metadata in comments
+                validkeys = "id vram description".split(" ")
+                for line in lines:
+                    ws = line.split(":")
+                    if len(ws) > 1:
+                        key = ws[0].replace("#", "").strip()
+                        if key == "vram":
+                            d[key] = megabyteIntFromVRamString(ws[1].strip())
+                        elif key in validkeys:
+                            d[key] = ":".join(ws[1:]).strip()
+            except:
+                # couldn't read or something
+                printerr(traceback.format_exc() + "\nSomething... formatting something...")
+                continue
+        loadouts.append(d)
+
+    #ok got all loadouts and they're valid now we find the best one
+    def predicate(loadout):
+        if "vram" not in loadout.keys():
+            return False
+
+        if loadout["vram"] > vram:
+            return False
+        return True
+
+    def rank(loadouts):
+        # no idea how to rank them yet
+        random.shuffle(loadouts)
+        return loadouts
+    
+    xs = rank(list(filter(predicate, loadouts)))
+    if xs == []:
+        return None
+    return xs[0]
+
+
+def megabyteIntFromVRamString(w):
+    return int(round(parse_size(w) / 1e6))
+
+def parse_size(w):
+    """Takes a string of byte size like 200kb and returns the number of bytes as an int. Returns -1 on no parse."""
+    units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
+    # Alternative unit definitions, notably used by Windows:
+    # units = {"B": 1, "KB": 2**10, "MB": 2**20, "GB": 2**30, "TB": 2**40}
+    w = w.strip()
+    for i in range(0, len(w)):
+        if not(w[i].isdigit()):
+            break
+
+    if i == len(w):
+        number = w
+        unit = "GB"
+    else:
+        number = w[:i].strip()
+        unit = w[i:].strip().upper()
+        
+        try:
+            n = int(number)
+        except:
+            return -1
+    if unit not in units:
+        return -1
+    return int(round(float(n) * units[unit]))
+                                

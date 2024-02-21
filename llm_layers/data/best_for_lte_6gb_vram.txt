@@ -1,8 +1,0 @@
-# id: i-can-win
-# vram: 6gb
-name	gpu_layers	context	prompt_format	type
-dolphin-2.7-mixtral-8x7b.Q4_0.gguf	22	4096	chat-ml	default
-dolphin-2.1-mistral-7b.Q4_K_M.gguf	28	8184	chat-ml	chat
-wizardcoder-python-7b-v1.0.Q5_K_M.gguf	16	8184	alpaca	code
-tinyllama-1.1b-chat-v0.3.Q8_0.gguf	999	2048	chat-ml	mini
-phi-2.Q8_2048.gguf	999	0	phi	mini

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 import os
 
 
-LLM_LAYERS_VERSION='0.1.0'
+LLM_LAYERS_VERSION='0.2.0'
 
 
 with open("README.md", "r", encoding="utf-8") as readme_file:
