@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys, os, stat, glob, argparse, appdirs, traceback, datetime, re, csv, tempfile
+from llm_layers import getData
 from llm_layers.layers import *
 
 # switch output on and off globally
@@ -12,13 +13,16 @@ def main():
     parser = argparse.ArgumentParser(description="ghostbox-generate-startup-scripts - Create server startup scripts for GGUF file directory.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     #parser.add_argument("--color", action=argparse.BooleanOptionalAction, default=True, help="Enable colored output.")
     parser.add_argument("--pretty", action=argparse.BooleanOptionalAction, default=True, help="Enable prettier output using tabular. Disable this alongside -d for copy/pastable output.")
+    parser.add_argument("--download", action=argparse.BooleanOptionalAction, default=True, help="Download models in layers file from huggingface. -d or --dry_run implies --no-download.")
     parser.add_argument("-g", "--generate", action=argparse.BooleanOptionalAction, default=False, help="Generate a layers file and run scripts. This will never overwrite settings in an existing layers file, but may add new entries. Existing scripts will be overwritten without mercy.")
     parser.add_argument("-d", "--dry_run", action=argparse.BooleanOptionalAction, default=True, help="Will not write anything to disk, but print a sample layers file to stdout. This is the default when run without either -d or -g. If both parameters are provided, -g will dominate.")
     parser.add_argument("--model_directory", type=str, default="~/.cache/huggingface", help="Directory where you store your GGUF files or repositories. This will be searched recursively. If you have a folder full of huggingface repositories, that is what this parameter wants.")
     parser.add_argument("--output_directory", type=str, default="~/.local/bin", help="Directory to put generated scripts into. Existing scripts will be overriden.")
     parser.add_argument("-l", '--layers', type=int, default=1, help="Default number of layers to offload to GPU by default. You can just open the generated script afterwards and change this easily, or you can adjust the LLM_LAYERS environment variable. Will also be written to the llm_layers file.")
     parser.add_argument("--context", type=int, default=2048, help="Default context size for loaded models. You can change this via the LLM_MAX_CONTEXT_LENGTH environment variable for all scripts. Will also be written to the llm_layers file.")
-    parser.add_argument("--layers_file", type=str, default=getLayersFile(), help="File to write individual model loading information to. This file will be checked by the generated scripts for layers and context to use. You can still override these settings by supplying your own command line parameters.")
+    parser.add_argument("--layers_file", type=str, default=getLayersFile(), help="File to write individual model loading information to. This file will be checked by the generated scripts for layers and context to use. You can still override these settings by supplying your own command line parameters. If this file already exists, it will not be overwritten, though new entries may be added to it. Also, it will be used as a --include_layers_file. The default value is platform dependent, often ~/.config/llm_layers. It is quit reasonable to leave the default and keep regenerating that file.")
+    parser.add_argument("-b", "--best_for_machine", action=argparse.BooleanOptionalAction, default=False, help="Include models based on the current system hardware. The selection is highly opinionated and subject to change over time. This option is disabled by default, unless the --layers_file does not exist, in which case the program assumes it's the first time you are running it, enabling -b. You can disable this behaviour by passing --no-best_for_machine explicitly.")
+    parser.add_argument("-I", '--include_layers_file', action="append", default=[], help="Additional layer files to source from. Data will be gathered and added to the resulting --layer_file. Include layer files will not be written to. If multiple layer files contain entires with the same 'name' field, the result is undefined. This option can be supplied multiple times.")
     parser.add_argument("-p", "--prefix", type=str, default="run.", help="String to prepend each script's filename. Hint: Try putting the number of layers here.")
     parser.add_argument("-s", "--suffix", type=str, default=".sh", help="String to append to each resulting string.")
     parser.add_argument("-x","--executable", type=str, default="", help="Path to a backend (e.g. llama.cpp) executable. Server or main usually work. You can adjust this later with the LLM_SERVER environment variable.")
@@ -26,10 +30,16 @@ def main():
     args = parser.parse_args()
     args.layers_file = os.path.expanduser(args.layers_file)
 
+    if not(os.path.isfile(args.layers_file)):
+        if not("--no-best_for_machine" in sys.argv):
+            args.best_for_machine = True
+            
     if args.generate and args.dry_run:
         args.dry_run = False
         
     if args.dry_run:
+        if "--download" not in sys.argv:
+            args.download = False
         drymsg = "# Running with -d (--dry_run), Nothing permanent will be written to disk. Here is"
         if args.pretty:
             drymsg += "a pretty version of the potential layers file.\n"
@@ -54,15 +64,46 @@ def main():
     if not(os.path.isdir(mdir)):
         fail("Not a directory: " + mdir)
 
-    models = getGGUFFiles(mdir)
+    models = getGGUFFiles(mdir, args)
     if args.generate:
         writeScriptFiles(models, sdir, args)
 
+
+
+    # recommendations
+    include_models = []
+    if args.best_for_machine:
+        printout("Determining hardware...")
+        vram = get_total_vram_mb()
+        printout("Found " + str(vram) + "MB of maximum video ram.\nChoosing appropriate loadout...")
+        # arbitrary thresholds
+        # FIXME: not implemented yet
+        choice = "best_for_lte_6gb_vram.txt"
+        lines = open(getData(choice), "r").read().split("\n")
+        if lines != [] and lines[0].startswith("# id: "):
+            cool_name = lines[0].replace("# id: ", "")
+        else:
+            cool_name = choice
+            printout("Done. Chose the '" + cool_name + "' loadout for your hardware.")
+        
+        best_models = load_layers_file(getData(choice))
+        include_models += best_models
+
         # we always write this, though it might be a temp file
-
     if args.layers_file != "":
-        doLayersFile(args.layers_file, models, args, cmd=cmd)
+        # get the includes
+        for includefile in args.include_layers_file:
+            include_models += doLayersFile(includefile, models + include_models, args, dry=True)
+            
+        layers_models = doLayersFile(args.layers_file, models + include_models, args, cmd=cmd)
+    else:
+        layers_models = []
 
+    # downloading from hf
+    if args.download:
+        print("Downloading models...")
+            
+        
     printout("""If you want, add the following lines to your ~/.bashrc to set the values for all scripts.
 
 ```
@@ -87,7 +128,19 @@ Happy hacking!""")
         
 
 
-def doLayersFile(layersfile, models, args, cmd=""):
+def doLayersFile(layersfile, models, args, cmd="", dry=False):
+    """This function reads and writes a layers file, based on a filename, models, and some optional parameters. Returns model information found in layersfile.
+    Parameter
+    layersfile : str
+    A filename with model data, that will be both read from and written to.
+    models : list
+    A list of dictionaries containing model data
+    args : namespace
+    An argparse command line argument object.
+    cmd : str
+    The command used to start the program, which is printed at the top of the layer file.
+    Returns : list
+    A list of dictionaries with model data of only the models found in the layersfile."""
     if os.path.isdir(layersfile):
         printerr("Layers file " + layersfile + " is a directory. What is this nonsense?")
     else:
@@ -102,28 +155,25 @@ def doLayersFile(layersfile, models, args, cmd=""):
             data = []
         newData = []
         for model in models:
-            file = model["file"]
-            model["name"] = os.path.basename(os.path.normpath(file))
+            if "file" in model:
+                file = model["file"]
+                model["name"] = os.path.basename(os.path.normpath(file))
             if list(filter(lambda d: d["name"] == model["name"], data)) != []:
                 # don't override anything
                 continue
-            # assign defaults
-            model["gpu_layers"] = args.layers
-            model["context"] = args.context
             newData.append(model)
 
-
-    if writeLayersConfig(layersfile, data + newData, cmd=cmd, dry=args.dry_run):
+    if writeLayersConfig(layersfile, data + newData, cmd=cmd, dry=(args.dry_run or dry)):
         printerr("Could not write layersfile " + layersfile)
     else:
         printout("Wrote layers to " + layersfile)
         printout("You can edit the layers file to adjust the context size and number of layers offloaded to the GPU on an individual, per-model basis.")
-
+    return data
     
 def makeScriptName(modelfile, prefix="", suffix=""):
     return prefix + os.path.basename(modelfile) + suffix
 
-def getGGUFFiles(mdir, extensions=["gguf"]):
+def getGGUFFiles(mdir, args, extensions=["gguf"]):
     """Recursively walks through directories collecting gguf models. Returns a list of dictionaries with key "name" being the gguf model filename."""
     models = []
     seen = set()
@@ -150,11 +200,12 @@ def getGGUFFiles(mdir, extensions=["gguf"]):
     for file in files:
         if os.path.isfile(file):
             if file.lower().endswith(".gguf") and not(file in seen):
-                d = { "file" : file, "mmproj" : mmproj, "prompt_format" : prompt_format, "type" : model_type}
+                d = { "file" : file, "mmproj" : mmproj, "prompt_format" : prompt_format, "type" : model_type, "context" : args.context, "gpu_layers" : args.layers}
+
                 seen.add(file)
                 models.append(d)
         else:
-            models = models + getGGUFFiles(file)
+            models = models + getGGUFFiles(file, args, extensions=extensions)
     return models
                 
 

@@ -1,0 +1,7 @@
+# id: I can win
+name	gpu_layers	context	prompt_format	type
+mistral-7b-instruct-v0.2.Q4_K_M.gguf	20	2048	mistral	default
+dolphin-2.1-mistral-7b.Q4_K_M.gguf	20	2048	chat-ml	chat
+wizardcoder-python-7b-v1.0.Q5_K_M.gguf	20	2048	alpaca	code
+tinyllama-1.1b-chat-v0.3.Q8_0.gguf	999	2048	chat-ml	mini
+phi-2.Q8_0.gguf	999	2048	phi	mini

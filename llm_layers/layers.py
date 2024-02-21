@@ -1,6 +1,6 @@
-import os, appdirs, sys, traceback, csv
+import os, appdirs, sys, traceback, csv, torch
 from tabulate import tabulate
-from huggingface_hub import list_models, get_paths_info, repo_info
+from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download
 
 def getLayersFile():
     return appdirs.user_config_dir() + "/llm_layers"
@@ -77,3 +77,34 @@ def get_hf_repo_for_file(filename):
 def load_layers_file(file=getLayersFile()):
     """Returns a list of dictionaries, one for each row in the layers file."""
     return loadLayersFile(file)
+
+def download_for_layer_file(filename):
+    """Takes filename of a layer file and downloads all listed model files using the huggingface api."""
+    try:
+        ds = load_layers_file(filename)
+    except FileNotFoundError:
+        print("error: File not found " + filename, file=sys.stderr)
+        return
+
+    for d in ds:
+        repo = get_hf_repo_for_file(d["name"])
+        if repo:
+            print("Getting " + repo + " ...")
+            snapshot_download(repo,
+                              allow_patterns=[d["name", "*README*", "*readme*", "*LICENSE*", "*license*"]])
+            
+                                    
+
+def get_total_vram_mb():
+    has_cuda = torch.cuda.is_available()
+    if not(has_cuda):
+        return 0
+    n = torch.cuda.device_count()
+    vram = 0
+    for i in range(0, n):
+        vram += torch.cuda.get_device_properties(i).total_memory / 1e6
+
+    return round(vram)
+    
+
+            
