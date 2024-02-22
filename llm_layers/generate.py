@@ -21,7 +21,8 @@ def main():
     parser.add_argument("--output_directory", type=str, default="~/.local/bin", help="Directory to put generated scripts into. Existing scripts will be overriden.")
     parser.add_argument("-l", '--layers', type=int, default=1, help="Default number of layers to offload to GPU by default. You can just open the generated script afterwards and change this easily, or you can adjust the LLM_LAYERS environment variable. Will also be written to the llm_layers file.")
     parser.add_argument("--context", type=int, default=2048, help="Default context size for loaded models. You can change this via the LLM_MAX_CONTEXT_LENGTH environment variable for all scripts. Will also be written to the llm_layers file.")
-    parser.add_argument("--layers_file", type=str, default=getLayersFile(), help="File to write individual model loading information to. This file will be checked by the generated scripts for layers and context to use. You can still override these settings by supplying your own command line parameters. If this file already exists, it will not be overwritten, though new entries may be added to it. Also, it will be used as a --include_layers_file. The default value is platform dependent, often ~/.config/llm_layers. It is quit reasonable to leave the default and keep regenerating that file.")
+    parser.add_argument("-f", "--layers_file", type=str, default=getLayersFile(), help="File to write individual model loading information to. This file will be checked by the generated scripts for layers and context to use. You can still override these settings by supplying your own command line parameters. If this file already exists, it will not be overwritten, though new entries may be added to it. Also, it will be used as a --include_layers_file. The default value is platform dependent, often ~/.config/llm_layers. It is quit reasonable to leave the default and keep regenerating that file.")
+    parser.add_argument("-V", "--vram", type=str, default="", help="Set vram amount for loadout recommendation with -b. By default, vram is determined from hardware. Without -b, this parameter has no effect.")
     parser.add_argument("-b", "--best_for_machine", action=argparse.BooleanOptionalAction, default=False, help="Include models based on the current system hardware. The selection is highly opinionated and subject to change over time. This option is disabled by default, unless the --layers_file does not exist, in which case the program assumes it's the first time you are running it, enabling -b. You can disable this behaviour by passing --no-best_for_machine explicitly.")
     parser.add_argument("-I", '--include_layers_file', action="append", default=[], help="Additional layer files to source from. Data will be gathered and added to the resulting --layer_file. Include layer files will not be written to. If multiple layer files contain entires with the same 'name' field, the result is undefined. This option can be supplied multiple times.")
     parser.add_argument("-p", "--prefix", type=str, default="run.", help="String to prepend each script's filename. Hint: Try putting the number of layers here.")
@@ -31,6 +32,11 @@ def main():
     args = parser.parse_args()
     args.layers_file = os.path.expanduser(args.layers_file)
 
+    if args.vram != "":
+        args.vram = megabyteIntFromVRamString(args.vram)
+        if args.vram <= 0:
+            fail("error: Nonsense or negative vram specified. Please specify vram amount like '-V 6gb' or '-V 6000MB' or similar.")
+            
     if not(os.path.isfile(args.layers_file)):
         if not("--no-best_for_machine" in sys.argv):
             args.best_for_machine = True
@@ -71,7 +77,10 @@ def main():
     include_models = []
     if args.best_for_machine:
         printout("Determining hardware...")
-        vram = get_total_vram_mb()
+        if not(args.vram):
+            vram = get_total_vram_mb()
+        else:
+            vram = args.vram
         printout("Found " + str(vram) + "MB of maximum video ram.\nChoosing appropriate loadout...")
         choice = choiceForVRam(vram)
         if choice is not None:
