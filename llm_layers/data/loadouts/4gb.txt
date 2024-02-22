@@ -1,0 +1,5 @@
+# id: neo
+# vram: 4gb
+name	gpu_layers	context	prompt_format	type
+phi-2.Q8_2048.gguf	999	2048	phi	mini
+tinyllama-1.1b-chat-v0.3.Q8_0.gguf	999	0	chat-ml	mini
