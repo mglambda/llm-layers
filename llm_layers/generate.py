@@ -448,9 +448,7 @@ def choiceForVRam(vram):
         return True
 
     def rank(loadouts):
-        # no idea how to rank them yet
-        random.shuffle(loadouts)
-        return loadouts
+        return list(reversed(sorted(loadouts, key=lambda d: d["vram"])))
     
     xs = rank(list(filter(predicate, loadouts)))
     if xs == []:
