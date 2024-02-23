@@ -1,7 +1,13 @@
 import os, appdirs, sys, traceback, csv, torch
 from tabulate import tabulate
-from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download
+from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download, list_files_info
 from huggingface_hub.utils._errors import GatedRepoError
+from requests import HTTPError
+from functools import *
+
+def printerr(w):
+    print(w, file=sys.stderr)
+    
 
 def getLayersFile():
     return appdirs.user_config_dir() + "/llm_layers"
@@ -16,47 +22,70 @@ def show(file=getLayersFile()):
     try:
         ds = loadLayersFile(file)
     except:
-        print(traceback.format_exc())
-        print("error: Couldn't load the layers file " + file, file=sys.stderr)
+        printerr(traceback.format_exc())
+        printerr("error: Couldn't load the layers file " + file, file=sys.stderr)
         return ""
     return tabulate(ds, headers="keys")
-    
-def reposFromFile(filename):
-    """Given a filename (e.g. a gguf file), returns a list of huggingface repository ids with that file in it. The list may be empty."""
-    # hf will not allow search in repos directly, so we first have to find the repo with some trickery and guesswork
-    # of course, we don't know filename, it might be totally ok as is
-    ws = filename.lower().split(".")
+
+def splitIntercalateFilename(filename, splits):
+    """DOes a thing to a string recursively. Example:
+    splitIntercalateFilename("llava-1.6-7b.gguf", [".", "-"])
+    returns ["llava", "-1", ".6", "-7b", ".gguf"]"""
+    if splits == []:
+        return [filename]
+    splitv = splits[0] 
+    ws = filename.lower().split(splitv)
     # add the dots back in
     for i in range(0, len(ws)):
         if i == 0 or i == len(ws)-1:
             continue
-        ws[i] = "." + ws[i]
-        
+        ws[i] = splitv + ws[i]
+
+    return reduce(lambda xs, ys: xs+ys, map(lambda w: splitIntercalateFilename(w, splits[1:]), ws), [])
+
+def reposFromFile(filename, exhaustive=False):
+    """Given a filename (e.g. a gguf file), returns a list of huggingface repository ids with that file in it. The list may be empty."""
+    # hf will not allow search in repos directly, so we first have to find the repo with some trickery and guesswork
+    # of course, we don't know filename, it might be totally ok as is
+    ws = splitIntercalateFilename(filename, [".", "-"])
     best = []
     query = ""
     for w in ws:
         query += w
-        xs = list(list_models(search=query))
+        xs = list(map(lambda m: m.id, list_models(search=query)))
         if xs == []:
             # a longer string won't get any more results
             break
-        if best == [] or (len(xs) < len(best)):
-            # the more specific result is better, and fewer results is arguably more specific
-            best = xs
+        if exhaustive:
+            # gather them all, but avoid uplicates
+            best = list(set(best + xs))            
 
+        else:
+            if best == [] or (len(xs) < len(best)):
+                # the more specific result is better, and fewer results is arguably more specific
+                best = xs
+
+
+                if exhaustive:
+                    printerr("Had trouble finding '" + filename + "'\nExhaustive query found " + str(len(best)) + " repositories.") 
     # get and check files
     winners = []
     for modelinfo in best:
         try:
-            for fileinfo in get_paths_info(modelinfo.id, filename):
+            firstTry = get_paths_info(modelinfo, filename)
+            for fileinfo in firstTry:
                 # want exact match here
                 if fileinfo.path == filename:
-                    winners.append(modelinfo.id)
+                    winners.append(modelinfo)
+
         except GatedRepoError:
             continue
         except HTTPError:
+            printerr("http error for " + modelinfo)
             continue
-                
+
+        if winners == [] and not(exhaustive):
+            return reposFromFile(filename, exhaustive=True)
     return winners
             
 def pickWinner(winners, filename):
@@ -75,7 +104,7 @@ def pickWinner(winners, filename):
         
         repo_data.append((repo_id, repo))                                
 
-    winner = { "name" : "", "score" : 0}
+    winner = { "name" : "", "score" : -10}
     for (repo_id, repo) in repo_data:
         if repo.author == "TheBloke":
             # clear winner, return early
@@ -100,20 +129,22 @@ def load_layers_file(file=getLayersFile()):
     """Returns a list of dictionaries, one for each row in the layers file."""
     return loadLayersFile(file)
 
-def download_for_layers_file(filename):
-    """Takes filename of a layer file and downloads all listed model files using the huggingface api."""
+def download_for_layers_file(filename, exclude=[]):
+    """Takes filename of a layer file and downloads all listed model files using the huggingface api. exclude is a list of filenames which will not be downloaded, even if listed in the layers file."""
     try:
         ds = load_layers_file(filename)
     except FileNotFoundError:
-        print("error: File not found " + filename, file=sys.stderr)
+        printerr("error: File not found " + filename, file=sys.stderr)
         return
 
     for d in ds:
+        if d["name"] in exclude:
+            continue
         repo = get_hf_repo_for_file(d["name"])
         if repo:
-            print("Getting " + repo + " ...")
+            printerr("Getting " + repo + " ...")
             snapshot_download(repo,
-                              allow_patterns=[d["name"], "*README*", "*readme*", "*LICENSE*", "*license*", "*.txt", "*.md", "*.json"])
+                              allow_patterns=[d["name"], "*README*", "*readme*", "*LICENSE*", "*license*", "*.txt", "*.md", "*.json", "*mmproj*"])
             
                                     
 

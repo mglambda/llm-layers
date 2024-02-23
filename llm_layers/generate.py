@@ -4,6 +4,10 @@ from llm_layers import getData
 from llm_layers.layers import *
 from functools import *
 
+def printerr(w):
+    if printerr_enabled:
+        print(w, file=sys.stderr)
+
 # switch output on and off globally
 print_enabled = True
 printerr_enabled = True
@@ -24,11 +28,13 @@ def main():
     parser.add_argument("-f", "--layers_file", type=str, default=getLayersFile(), help="File to write individual model loading information to. This file will be checked by the generated scripts for layers and context to use. You can still override these settings by supplying your own command line parameters. If this file already exists, it will not be overwritten, though new entries may be added to it. Also, it will be used as a --include_layers_file. The default value is platform dependent, often ~/.config/llm_layers. It is quit reasonable to leave the default and keep regenerating that file.")
     parser.add_argument("-V", "--vram", type=str, default="", help="Set vram amount for loadout recommendation with -b. By default, vram is determined from hardware. Without -b, this parameter has no effect.")
     parser.add_argument("-b", "--best_for_machine", action=argparse.BooleanOptionalAction, default=False, help="Include models based on the current system hardware. The selection is highly opinionated and subject to change over time. This option is disabled by default, unless the --layers_file does not exist, in which case the program assumes it's the first time you are running it, enabling -b. You can disable this behaviour by passing --no-best_for_machine explicitly.")
+    parser.add_argument("--force_redownload", action=argparse.BooleanOptionalAction, default=False, help="Forces redownload of models when downloading is enabled. By default, models that are found in the model_directory will skip the download.")
     parser.add_argument("-I", '--include_layers_file', action="append", default=[], help="Additional layer files to source from. Data will be gathered and added to the resulting --layer_file. Include layer files will not be written to. If multiple layer files contain entires with the same 'name' field, the result is undefined. This option can be supplied multiple times.")
     parser.add_argument("-p", "--prefix", type=str, default="run.", help="String to prepend each script's filename. Hint: Try putting the number of layers here.")
     parser.add_argument("-s", "--suffix", type=str, default=".sh", help="String to append to each resulting string.")
     parser.add_argument("-x","--executable", type=str, default="", help="Path to a backend (e.g. llama.cpp) executable. Server or main usually work. You can adjust this later with the LLM_SERVER environment variable.")
-    parser.add_argument("--additional_arguments", type=str, default="--parallel 1 --mlock --no-mmap >/dev/null 2>/dev/null &", help="Any additional arguments that will be passed onto the server executable.")
+    parser.add_argument("--log_directory", type=str, default=appdirs.user_log_dir(), help="Folder where to store the log files llm.1.log and llm.2.log, which will contain the executables standard output and standard error, respectively.")
+    parser.add_argument("--additional_arguments", type=str, default="--parallel 1 --mlock --no-mmap", help="Any additional arguments that will be passed onto the server executable.")
     args = parser.parse_args()
     args.layers_file = os.path.expanduser(args.layers_file)
 
@@ -36,6 +42,16 @@ def main():
         args.vram = megabyteIntFromVRamString(args.vram)
         if args.vram <= 0:
             fail("error: Nonsense or negative vram specified. Please specify vram amount like '-V 6gb' or '-V 6000MB' or similar.")
+
+    if args.log_directory:
+        # ensure it exists
+        if not(os.path.isdir(args.log_directory)):
+            # try to create, this might fail due to permissions etc.
+            try:
+                os.makedirs(args.log_directory)
+            except:
+                fail("error: Could not create logging directory " + args.log_directory + ". Please make sure it exists, or change the --log_directory parameter.")
+            
             
     if not(os.path.isfile(args.layers_file)):
         if not("--no-best_for_machine" in sys.argv):
@@ -110,11 +126,17 @@ def main():
     # downloading from hf
     if args.download:
         print("Downloading models... (you may want to grab a coffee)")
-        if args.dry_run:
-            layersfile = temp_layersfile
+        if args.dry_run and "-f" not in sys.argv:
+            # FIXME: "-f" is hacky
+            layersfile = temp_layersfile.name
         else:
             layersfile = args.layers_file
-        download_for_layers_file(layersfile)
+
+        if args.force_redownload:
+            exclude = []
+        else:
+            exclude=[m["name"] for m in models]
+        download_for_layers_file(layersfile, exclude=exclude)
         # regenerate file based models
         models = getGGUFFiles(mdir, args)
 
@@ -186,7 +208,7 @@ def doLayersFile(layersfile, models, args, cmd="", dry=False):
         printerr("Could not write layersfile " + layersfile)
     else:
         printout("Wrote layers to " + layersfile)
-        printout("You can edit the layers file to adjust the context size and number of layers offloaded to the GPU on an individual, per-model basis.")
+        printout("You can edit the layers file to adjust the context size and number of layers offloaded to the GPU on an individual, per-model basis. Changes will take effect without needing to regenerate the run scripts.")
     return data
     
 def makeScriptName(modelfile, prefix="", suffix=""):
@@ -260,7 +282,7 @@ def writeLayersConfig(layersfile, data, cmd="", dry=False):
     return False
 
 
-def mkBashScript(modelData, layersfile, layers=1, server="server", additional_arguments=""):
+def mkBashScript(modelData, layersfile, layers=1, server="server", additional_arguments="", logdir=""):
     modelpath = modelData["file"]
     # watch out bash script begins here
     w = """#!/bin/bash
@@ -268,10 +290,12 @@ MODEL=XXX_THE_MODEL_XXX
 CONFIGLAYERS=$( cat 'XXX_THE_LAYERSFILE_XXX' | grep -P "XXX_THE_MODELNAME_XXX\\t" | awk {'print $2'} )
 CONFIGCONTEXT=$( cat 'XXX_THE_LAYERSFILE_XXX' | grep -P "XXX_THE_MODELNAME_XXX\\t" | awk {'print $3'} )
 MMPROJ_FILE=XXX_THE_MMPROJ_FILE_XXX
-    
+LOG_DIR=XXX_THE_LOG_DIR_XXX
+
+echo "Starting run script for ${MODEL}"    
 if [ -n "$CONFIGLAYERS" ]
 then
-    echo "Found layers in layers file $XXX_THE_LAYERSFILE_XXX"
+    echo "Found layers in layers file XXX_THE_LAYERSFILE_XXX"
     LAYERS=$CONFIGLAYERS
 elif [ -n "$LLM_LAYERS" ]
 then
@@ -286,7 +310,7 @@ echo "Setting layers to $LAYERS"
 
 if [ -n "$CONFIGCONTEXT" ]
 then
-    echo "Found context length in layers file $XXX_THE_LAYERSFILE_XXX"
+    echo "Found context length in layers file XXX_THE_LAYERSFILE_XXX"
     MAX_CONTEXT_LENGTH=$CONFIGCONTEXT
 elif [ -n "$LLM_MAX_CONTEXT_LENGTH" ]
 then
@@ -310,15 +334,23 @@ then
 	echo "Found LLM_SERVER in environment."
 	SERVER="$LLM_SERVER"
 else
-	echo "Could not find LLM_SERVER in environment. Defaulting."
+	echo "Defaulting on server executable, as no LLM_SERVER is set."
 	SERVER="XXX_THE_SERVER_XXX"
 fi
 echo "Setting SERVER to $SERVER"
+
+if [ -n "$LOG_DIR" ]
+then
+    LOG_STDOUT="${LOG_DIR}/llm.1.log"
+    LOG_STDERR="${LOG_DIR}/llm.2.log"
+    echo "Logging to ${LOG_STDOUT} and ${LOG_STDERR}"
+fi
+    
 echo "End of run script. Starting server."
 PATH=./:$PATH
-$SERVER -c $MAX_CONTEXT_LENGTH -m $MODEL -ngl $LAYERS $MMPROJ_ARGS XXX_THE_ADDITIONALARGS_XXX $@
+$SERVER -c $MAX_CONTEXT_LENGTH -m $MODEL -ngl $LAYERS $MMPROJ_ARGS XXX_THE_ADDITIONALARGS_XXX $@ > "${LOG_STDOUT}" 2> "${LOG_STDERR}" &
 """
-    return w.replace("XXX_THE_MODEL_XXX", os.path.expanduser(modelpath)).replace("XXX_THE_LAYERS_XXX", str(layers)).replace("XXX_THE_SERVER_XXX", os.path.expanduser(server)).replace("XXX_THE_MODELNAME_XXX", re.escape(os.path.basename(os.path.expanduser(modelpath)))).replace("XXX_THE_LAYERSFILE_XXX", layersfile).replace("XXX_THE_ADDITIONALARGS_XXX", additional_arguments).replace("XXX_THE_MMPROJ_FILE_XXX", modelData["mmproj"])
+    return w.replace("XXX_THE_MODEL_XXX", os.path.expanduser(modelpath)).replace("XXX_THE_LAYERS_XXX", str(layers)).replace("XXX_THE_SERVER_XXX", os.path.expanduser(server)).replace("XXX_THE_MODELNAME_XXX", re.escape(os.path.basename(os.path.expanduser(modelpath)))).replace("XXX_THE_LAYERSFILE_XXX", layersfile).replace("XXX_THE_ADDITIONALARGS_XXX", additional_arguments).replace("XXX_THE_MMPROJ_FILE_XXX", modelData["mmproj"]).replace("XXX_THE_LOG_DIR_XXX", logdir)
 
 def fail(w):
     printerr(w)
@@ -328,10 +360,6 @@ def printout(w, **kwargs):
     if print_enabled:
         print(w, **kwargs)
         
-    
-def printerr(w):
-        if printerr_enabled:
-            print(w, file=sys.stderr)
     
 
 
@@ -394,7 +422,7 @@ def writeScriptFiles(models, sdir, args):
             printout("Generating " + scriptfile)
             
         f = open(scriptfile, "w")
-        f.write(mkBashScript(model, args.layers_file, layers=args.layers, server=args.executable, additional_arguments=args.additional_arguments))
+        f.write(mkBashScript(model, args.layers_file, layers=args.layers, server=args.executable, additional_arguments=args.additional_arguments, logdir=args.log_directory))
         f.flush()
         st = os.stat(scriptfile)
         os.chmod(scriptfile, st.st_mode | stat.S_IEXEC)

@@ -1,0 +1,8 @@
+# id: morpheus
+# vram: 12gb
+name	gpu_layers	context	prompt_format	type
+dolphin-2.7-mixtral-8x7b.Q4_0.gguf	13	2048	chat-ml	default
+dolphin-2.1-mistral-7b.Q8_0.gguf	999	8192	chat-ml	chat
+codebooga-34b-v0.1.Q4_K_M.gguf	24	4096	alpaca	code
+llava-v1.6-34b.Q4_K_M.gguf	24	2048	chat-ml	multimodal
+phi-2.Q8_2048.gguf	999	2048	phi	mini

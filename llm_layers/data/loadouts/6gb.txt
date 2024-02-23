@@ -1,4 +1,4 @@
-# id: i-can-win
+# id: babys-first-gpt
 # vram: 6gb
 name	gpu_layers	context	prompt_format	type
 neuralhermes-2.5-mistral-7b.Q6_K.gguf	22	2048	chat-ml	default

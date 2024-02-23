@@ -1,7 +1,8 @@
-# id: hurt-me-plenty
+# id: bring-it-on
 # vram: 8gb
 name	gpu_layers	context	prompt_format	type
 neuralhermes-2.5-mistral-7b.Q6_K.gguf	28	8192	chat-ml	default
 dolphin-2.1-mistral-7b.Q4_K_M.gguf	33	8192	chat-ml	chat
 wizardcoder-python-7b-v1.0.Q5_K_M.gguf	22	8192	alpaca	code
+llava-v1.6-mistral-7b.Q5_K_M.gguf	24	4096	chat-ml	multimodal
 phi-2.Q8_2048.gguf	999	2048	phi	mini
