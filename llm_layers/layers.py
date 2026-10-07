@@ -1,7 +1,7 @@
 import os, appdirs, sys, traceback, csv, torch
 from tabulate import tabulate
-from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download, list_files_info
-from huggingface_hub.utils._errors import GatedRepoError
+from huggingface_hub import list_models, get_paths_info, repo_info, snapshot_download
+from huggingface_hub.errors import GatedRepoError
 from requests import HTTPError
 from functools import *
 

@@ -34,7 +34,7 @@ def main():
     parser.add_argument("-s", "--suffix", type=str, default=".sh", help="String to append to each resulting string.")
     parser.add_argument("-x","--executable", type=str, default="", help="Path to a backend (e.g. llama.cpp) executable. Server or main usually work. You can adjust this later with the LLM_SERVER environment variable.")
     parser.add_argument("--log_directory", type=str, default=appdirs.user_log_dir(), help="Folder where to store the log files llm.1.log and llm.2.log, which will contain the executables standard output and standard error, respectively.")
-    parser.add_argument("--additional_arguments", type=str, default="-fa --parallel 1 --mlock --no-mmap --log-format text --log-disable", help="Any additional arguments that will be passed onto the server executable.")
+    parser.add_argument("--additional_arguments", type=str, default="-fa on", help="Any additional arguments that will be passed onto the server executable.")
     args = parser.parse_args()
     args.layers_file = os.path.expanduser(args.layers_file)
     if args.executable:
